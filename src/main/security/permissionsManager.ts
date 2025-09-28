@@ -2,28 +2,30 @@
 // See LICENSE.txt for license information.
 
 import type {
-    FilesystemPermissionRequest,
-    IpcMainInvokeEvent,
-    MediaAccessPermissionRequest,
-    OpenExternalPermissionRequest,
-    PermissionRequest,
-    WebContents} from 'electron';
+   FilesystemPermissionRequest,
+   IpcMainInvokeEvent,
+   MediaAccessPermissionRequest,
+   OpenExternalPermissionRequest,
+   PermissionRequest,
+   WebContents} from 'electron';
 import {
-    app,
-    dialog,
-    ipcMain,
-    shell,
-    systemPreferences,
+   app,
+   dialog,
+   ipcMain,
+   shell,
+   systemPreferences,
 } from 'electron';
+import fs from 'fs';
+import path from 'path';
 
 import CallsWidgetWindow from 'app/callsWidgetWindow';
 import MainWindow from 'app/mainWindow/mainWindow';
 import WebContentsManager from 'app/views/webContentsManager';
 import {
-    GET_MEDIA_ACCESS_STATUS,
-    OPEN_WINDOWS_CAMERA_PREFERENCES,
-    OPEN_WINDOWS_MICROPHONE_PREFERENCES,
-    UPDATE_PATHS,
+   GET_MEDIA_ACCESS_STATUS,
+   OPEN_WINDOWS_CAMERA_PREFERENCES,
+   OPEN_WINDOWS_MICROPHONE_PREFERENCES,
+   UPDATE_PATHS,
 } from 'common/communication';
 import Config from 'common/config';
 import JsonFileManager from 'common/JsonFileManager';
@@ -69,6 +71,44 @@ export class PermissionsManager extends JsonFileManager<PermissionsByOrigin> {
 
     constructor(file: string) {
         super(file);
+
+        // Автосоздание и чтение конфига trusted-iframes.json для динамических разрешений iframe
+        const userDataPath = path.dirname(file);  // Папка userData из permissions.json
+        const trustedConfigPath = path.join(userDataPath, 'trusted-iframes.json');
+        let trustedOrigins: string[] = [];
+
+        // Чтение или создание конфига
+        if (fs.existsSync(trustedConfigPath)) {
+            try {
+                const configData = JSON.parse(fs.readFileSync(trustedConfigPath, 'utf8'));
+                trustedOrigins = configData.origins || [];
+            } catch (err) {
+                log.warn('Ошибка чтения trusted-iframes.json:', err);
+            }
+        } else {
+            // Автосоздание с default (Jitsi)
+            const defaultConfig = {
+                origins: ['https://jitsi.kakao.wellsoft.pro'],  // Добавьте origins сюда
+                comment: 'Список trusted origins для автоматических разрешений media в iframe'
+            };
+            fs.writeFileSync(trustedConfigPath, JSON.stringify(defaultConfig, null, 2));
+            trustedOrigins = defaultConfig.origins;
+            log.info('Создан trusted-iframes.json с defaults');
+        }
+
+        // Установка разрешений для origins из конфига
+        trustedOrigins.forEach(origin => {
+            if (!this.json[origin]) {
+                this.json[origin] = {
+                    media: { allowed: true },  // Микрофон, аудио, camera
+                    screenShare: { allowed: true },  // Screen share
+                    notifications: { allowed: true },  // Notifications, если нужно
+                };
+            }
+        });
+        if (Object.keys(this.json).length > 0) {
+            this.writeToFile();  // Сохраняем обновления в permissions.json
+        }
 
         this.inflightPermissionChecks = new Map();
 
